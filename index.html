@@ -750,34 +750,48 @@ function gdriveConnect(){
   });
 }
 
+async function driveRequest(url, method='GET', body=null, contentType=null){
+  const headers={'Authorization':'Bearer '+accessToken};
+  if(contentType) headers['Content-Type']=contentType;
+  const opts={method,headers};
+  if(body) opts.body=body;
+  const r=await fetch(url,opts);
+  if(!r.ok){ const t=await r.text(); throw new Error(t); }
+  const ct=r.headers.get('content-type')||'';
+  if(ct.includes('application/json')) return r.json();
+  return r.text();
+}
+
 async function gdrivePush(){
   if(!accessToken){ showToast('⚠ Connectez Google Drive d\'abord'); return; }
   showToast('☁ Sauvegarde en cours...');
   try{
     const content=JSON.stringify(state);
-    // Check if file exists
-    const list=await gapi.client.request({path:'https://www.googleapis.com/drive/v3/files',method:'GET',params:{spaces:'appDataFolder',q:`name='${GDRIVE_FILENAME}'`,fields:'files(id,name)'}});
-    const files=list.result.files||[];
+    // Find existing file
+    const list=await driveRequest(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GDRIVE_FILENAME}'&fields=files(id,name)`);
+    const files=(list.files)||[];
     let fileId=files.length?files[0].id:null;
-    const meta={name:GDRIVE_FILENAME,mimeType:GDRIVE_MIME,...(!fileId?{parents:['appDataFolder']}:{})};
-    const boundary='-------nom_btp_boundary';
-    const body=`--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${GDRIVE_MIME}\r\n\r\n${content}\r\n--${boundary}--`;
+    const boundary='noma_btp_bound';
+    const meta=JSON.stringify({name:GDRIVE_FILENAME,mimeType:GDRIVE_MIME,...(!fileId?{parents:['appDataFolder']}:{})});
+    const multipart=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: ${GDRIVE_MIME}\r\n\r\n${content}\r\n--${boundary}--`;
     const method=fileId?'PATCH':'POST';
-    const path=fileId?`https://www.googleapis.com/upload/drive/v3/files/${fileId}`:'https://www.googleapis.com/upload/drive/v3/files';
-    await gapi.client.request({path,method,params:{uploadType:'multipart'},headers:{'Content-Type':`multipart/related; boundary=${boundary}`},body});
+    const url=fileId
+      ?`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`
+      :`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+    await driveRequest(url, method, multipart, `multipart/related; boundary=${boundary}`);
     showToast('✅ Sauvegardé sur Google Drive !');
-  }catch(e){ showToast('❌ Erreur Drive : '+e.message); }
+  }catch(e){ showToast('❌ Erreur Drive : '+(e.message||'inconnue')); console.error(e); }
 }
 
 async function gdrivePull(){
   if(!accessToken){ showToast('⚠ Connectez Google Drive d\'abord'); return; }
   showToast('⬇ Récupération en cours...');
   try{
-    const list=await gapi.client.request({path:'https://www.googleapis.com/drive/v3/files',method:'GET',params:{spaces:'appDataFolder',q:`name='${GDRIVE_FILENAME}'`,fields:'files(id,name)'}});
-    const files=list.result.files||[];
+    const list=await driveRequest(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GDRIVE_FILENAME}'&fields=files(id,name)`);
+    const files=(list.files)||[];
     if(!files.length){ showToast('⚠ Aucune sauvegarde trouvée sur Drive'); return; }
-    const dl=await gapi.client.request({path:`https://www.googleapis.com/drive/v3/files/${files[0].id}`,method:'GET',params:{alt:'media'}});
-    const d=typeof dl.result==='string'?JSON.parse(dl.result):dl.result;
+    const text=await driveRequest(`https://www.googleapis.com/drive/v3/files/${files[0].id}?alt=media`);
+    const d=typeof text==='string'?JSON.parse(text):text;
     if(!d.invoices) throw new Error('Format invalide');
     if(!confirm(`Restaurer ${d.invoices.length} factures depuis Google Drive ?`)) return;
     state=d; save(); loadSettingsForm();
@@ -785,7 +799,7 @@ async function gdrivePull(){
     document.getElementById('tva').value=state.settings.tva||20;
     update();
     showToast('✅ '+d.invoices.length+' factures restaurées !');
-  }catch(e){ showToast('❌ Erreur : '+e.message); }
+  }catch(e){ showToast('❌ Erreur : '+(e.message||'inconnue')); console.error(e); }
 }
 
 // ══ DASHBOARD ══
